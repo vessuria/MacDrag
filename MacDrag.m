@@ -1,3 +1,10 @@
+/* See LICENSE file for copyright and license details.
+ *
+ * MacDrag - Drag and resize windows with modifier
+ * 
+ * To understand everything else, start reading main().
+ */
+
 #import <ApplicationServices/ApplicationServices.h>
 #import <Cocoa/Cocoa.h>
 
@@ -7,191 +14,158 @@ CGPoint getWinPos(AXUIElementRef window);
 void setWinPos(AXUIElementRef window, CGPoint point);
 CGSize getWinSize(AXUIElementRef window);
 void setWinSize(AXUIElementRef window, CGSize size);
+void updateWin(AXUIElementRef win);
+void stopTimer();
 CGEventRef callback(CGEventTapProxy proxy, CGEventType type,
                     CGEventRef event, void *refcon);
 
 AXUIElementRef target = NULL;
-CGPoint initPos;
-CGSize initSize;
-CGPoint initMPos;
+CGPoint initPos, initMPos, pendingPos;
+CGSize initSize, pendingSize;
+static dispatch_source_t updateTimer = NULL;
+static bool hasPos = false;
+static bool hasSize = false;
 bool dragging = false;
 bool resizing = false;
-bool resizeLeft = false;
-bool resizeTop = false;
+bool resL = false;
+bool resT = false;
 
-AXUIElementRef getElementAtPos(CGPoint point) {
-  AXUIElementRef systemwide = AXUIElementCreateSystemWide();
-  AXUIElementRef element = NULL;
-  AXError result = AXUIElementCopyElementAtPosition(
-    systemwide, point.x, point.y, &element);
-  CFRelease(systemwide);
-
-  if (result == kAXErrorSuccess) return element;
-
-  return NULL;
+AXUIElementRef getElementAtPos(CGPoint pt) {
+    AXUIElementRef sys = AXUIElementCreateSystemWide(), el = NULL;
+    AXUIElementCopyElementAtPosition(sys, pt.x, pt.y, &el);
+    CFRelease(sys);
+    return el;
 }
 
-AXUIElementRef getWinFromElement(AXUIElementRef element) {
-  AXUIElementRef curElement = element;
-  CFRetain(curElement);
-
-  while (true) {
-    CFTypeRef role = NULL;
-    AXError result = AXUIElementCopyAttributeValue(
-      curElement, kAXRoleAttribute, &role);
-
-    if (result == kAXErrorSuccess && role != NULL) {
-      if (CFStringCompare((CFStringRef)role, kAXWindowRole, 0) == kCFCompareEqualTo) {
-        CFRelease(role);
-        return curElement;
-      }
-      CFRelease(role);
+AXUIElementRef getWinFromElement(AXUIElementRef el) {
+    AXUIElementRef cur = el;
+    CFRetain(cur);
+    while (cur) {
+        CFTypeRef role = NULL;
+        if (AXUIElementCopyAttributeValue(cur, kAXRoleAttribute, &role) == kAXErrorSuccess && role) {
+            bool isWin = CFStringCompare(role, kAXWindowRole, 0) == kCFCompareEqualTo;
+            CFRelease(role);
+            if (isWin) return cur;
+        }
+        CFTypeRef next = NULL;
+        AXUIElementCopyAttributeValue(cur, kAXParentAttribute, &next);
+        CFRelease(cur);
+        cur = (AXUIElementRef)next;
     }
-
-    CFTypeRef parent = NULL;
-    AXError parentResult = AXUIElementCopyAttributeValue(
-      curElement, kAXParentAttribute, &parent);
-
-    CFRelease(curElement);
-    if (parentResult == kAXErrorSuccess && parent != NULL)
-      curElement = (AXUIElementRef)parent;
-    else return NULL;
-  }
+    return NULL;
 }
 
-CGPoint getWinPos(AXUIElementRef window) {
-  CFTypeRef posVal = NULL;
-  AXError result = AXUIElementCopyAttributeValue(
-    window, kAXPositionAttribute, &posVal);
-  CGPoint point = CGPointZero;
-
-  if (result == kAXErrorSuccess && posVal != NULL) {
-    AXValueGetValue((AXValueRef)posVal, kAXValueCGPointType, &point);
-    CFRelease(posVal);
-  }
-  return point;
+CGPoint getWinPos(AXUIElementRef win) {
+    CFTypeRef v = NULL; CGPoint p = CGPointZero;
+    if (AXUIElementCopyAttributeValue(win, kAXPositionAttribute, &v) == kAXErrorSuccess)
+        AXValueGetValue(v, kAXValueCGPointType, &p); CFRelease(v);
+    return p;
 }
 
-void setWinPos(AXUIElementRef window, CGPoint point) {
-  AXValueRef posVal = AXValueCreate(kAXValueCGPointType, &point);
-  if (posVal) {
-    AXUIElementSetAttributeValue(window, kAXPositionAttribute, posVal);
-    CFRelease(posVal);
-  }
+void setWinPos(AXUIElementRef win, CGPoint p) {
+    AXValueRef v = AXValueCreate(kAXValueCGPointType, &p);
+    if (v) { AXUIElementSetAttributeValue(win, kAXPositionAttribute, v); CFRelease(v); }
 }
 
-CGSize getWinSize(AXUIElementRef window) {
-  CFTypeRef sizeVal = NULL;
-  AXError result =
-      AXUIElementCopyAttributeValue(window, kAXSizeAttribute, &sizeVal);
-  CGSize size = CGSizeZero;
-
-  if (result == kAXErrorSuccess && sizeVal != NULL) {
-    AXValueGetValue((AXValueRef)sizeVal, kAXValueCGSizeType, &size);
-    CFRelease(sizeVal);
-  }
-  return size;
+CGSize getWinSize(AXUIElementRef win) {
+    CFTypeRef v = NULL; CGSize s = CGSizeZero;
+    if (AXUIElementCopyAttributeValue(win, kAXSizeAttribute, &v) == kAXErrorSuccess) {
+        AXValueGetValue(v, kAXValueCGSizeType, &s); CFRelease(v);
+    }
+    return s;
 }
 
-void setWinSize(AXUIElementRef window, CGSize size) {
-  AXValueRef sizeVal = AXValueCreate(kAXValueCGSizeType, &size);
-  if (sizeVal) {
-    AXUIElementSetAttributeValue(window, kAXSizeAttribute, sizeVal);
-    CFRelease(sizeVal);
-  }
+void setWinSize(AXUIElementRef win, CGSize s) {
+    AXValueRef v = AXValueCreate(kAXValueCGSizeType, &s);
+    if (v) { AXUIElementSetAttributeValue(win, kAXSizeAttribute, v); CFRelease(v); }
+}
+
+void updateWin(AXUIElementRef win) {
+    if (updateTimer) return;
+    CFRetain(win);
+    updateTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0));
+    dispatch_source_set_timer(updateTimer, DISPATCH_TIME_NOW, 16 * NSEC_PER_MSEC, 1 * NSEC_PER_MSEC);
+    dispatch_source_set_event_handler(updateTimer, ^{
+        if (hasPos) { setWinPos(win, pendingPos); hasPos = false; }
+        if (hasSize) { setWinSize(win, pendingSize); hasSize = false; }
+    });
+    dispatch_source_set_cancel_handler(updateTimer, ^{ CFRelease(win); });
+    dispatch_resume(updateTimer);
+}
+
+void stopTimer() {
+    if (!updateTimer) return;
+    dispatch_source_cancel(updateTimer);
+    updateTimer = NULL;
 }
 
 CGEventRef callback(CGEventTapProxy proxy, CGEventType type,
-                         CGEventRef event, void *refcon) {
-  CGEventFlags flags = CGEventGetFlags(event);
-  bool alt = (flags & kCGEventFlagMaskAlternate) != 0;
+                    CGEventRef event, void *refcon)
+{
+    CGEventFlags flags = CGEventGetFlags(event);
+    bool alt = (flags & kCGEventFlagMaskAlternate) != 0;
 
-  if (!alt) {
-    if (dragging || resizing) {
-      dragging = false;
-      resizing = false;
-      if (target) {
-        CFRelease(target);
-        target = NULL;
-      }
-    }
-    return event;
-  }
-
-  CGPoint mouseLoc = CGEventGetLocation(event);
-
-  if (type == kCGEventLeftMouseDown || type == kCGEventRightMouseDown) {
-    AXUIElementRef element = getElementAtPos(mouseLoc);
-    if (element) {
-      AXUIElementRef window = getWinFromElement(element);
-      CFRelease(element);
-
-      if (window) {
-        if (target) CFRelease(target);
-        target = window;
-
-        initMPos = mouseLoc;
-        initPos = getWinPos(window);
-        initSize = getWinSize(window);
-
-        if (type == kCGEventLeftMouseDown) {
-          dragging = true;
-          return NULL;
-        } else if (type == kCGEventRightMouseDown) {
-          resizing = true;
-          resizeLeft = (mouseLoc.x < initPos.x + initSize.width / 2);
-          resizeTop = (mouseLoc.y < initPos.y + initSize.height / 2);
-          return NULL;
+    if (!alt) {
+        dragging = false;
+        resizing = false;
+        if (target) {
+            CFRelease(target);
+            target = NULL;
         }
-      }
+        return event;
     }
-  }
 
-  if (type == kCGEventLeftMouseDragged && dragging && target) {
-    CGFloat deltaX = mouseLoc.x - initMPos.x;
-    CGFloat deltaY = mouseLoc.y - initMPos.y;
+    CGPoint mouseLoc = CGEventGetLocation(event);
 
-    CGPoint newPosition = CGPointMake(initPos.x + deltaX, initPos.y + deltaY);
-    setWinPos(target, newPosition);
-    return NULL;
-  }
-
-  if (type == kCGEventRightMouseDragged && resizing && target) {
-    CGFloat deltaX = mouseLoc.x - initMPos.x;
-    CGFloat deltaY = mouseLoc.y - initMPos.y;
-
-    CGFloat minSize = 100.0;
-
-    CGFloat newWidth =
-        MAX(minSize, initSize.width + (resizeLeft ? -deltaX : deltaX));
-    CGFloat newHeight =
-        MAX(minSize, initSize.height + (resizeTop ? -deltaY : deltaY));
-
-    CGFloat newX =
-        initPos.x + (resizeLeft ?
-        (newWidth == minSize ?initSize.width - minSize : deltaX) : 0);
-
-    CGFloat newY =
-        initPos.y + (resizeTop ?
-        (newHeight == minSize ? initSize.height - minSize : deltaY) : 0);
-
-    setWinPos(target, CGPointMake(newX, newY));
-    setWinSize(target, CGSizeMake(newWidth, newHeight));
-    return NULL;
-  }
-
-  if ((type == kCGEventLeftMouseUp && dragging) ||
-      (type == kCGEventRightMouseUp && resizing)) {
-    dragging = false;
-    resizing = false;
-    if (target) {
-      CFRelease(target);
-      target = NULL;
+    // Mouse Down
+    if (type == kCGEventLeftMouseDown || type == kCGEventRightMouseDown) {
+        AXUIElementRef el = getElementAtPos(mouseLoc), win = el ? getWinFromElement(el) : NULL;
+        if (el) CFRelease(el);
+        if (win) {
+            if (target) CFRelease(target);
+            target = win;
+            initMPos = mouseLoc;
+            initPos = getWinPos(win);
+            initSize = getWinSize(win);
+            if (type == kCGEventLeftMouseDown) dragging = true;
+            else {
+                resizing = true;
+                resL = mouseLoc.x < initPos.x + initSize.width / 2;
+                resT = mouseLoc.y < initPos.y + initSize.height / 2;
+            }
+            return NULL;
+        }
     }
-    return NULL;
-  }
 
-  return event;
+    // Dragging / Resizing
+    if (target && (dragging || resizing)) {
+        CGFloat dx = mouseLoc.x - initMPos.x, dy = mouseLoc.y - initMPos.y;
+        if (dragging) {
+            pendingPos = CGPointMake(initPos.x + dx, initPos.y + dy);
+            hasPos = true;
+        } else {
+            CGFloat min = 100.0;
+            CGFloat w = MAX(min, initSize.width + (resL ? -dx : dx));
+            CGFloat h = MAX(min, initSize.height + (resT ? -dy : dy));
+            pendingPos = CGPointMake(initPos.x + (resL ? (w == min ? initSize.width - min : dx) : 0),
+                                    initPos.y + (resT ? (h == min ? initSize.height - min : dy) : 0));
+            pendingSize = CGSizeMake(w, h);
+            hasPos = hasSize = true;
+        }
+        updateWin(target);
+        if (type != kCGEventLeftMouseUp && type != kCGEventRightMouseUp) return NULL;
+    }
+
+    // Mouse Up
+    if ((type == kCGEventLeftMouseUp && dragging) || (type == kCGEventRightMouseUp && resizing)) {
+        dragging = resizing = false;
+        stopTimer();
+        if (target) { CFRelease(target); target = NULL; }
+        return NULL;
+    }
+
+
+    return event;
 }
 
 int main(int argc, const char *argv[]) {

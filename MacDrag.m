@@ -5,7 +5,6 @@
  * To understand everything else, start reading main().
  */
 
-#include <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <Cocoa/Cocoa.h>
 

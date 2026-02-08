@@ -5,6 +5,7 @@
  * To understand everything else, start reading main().
  */
 
+#include <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <Cocoa/Cocoa.h>
 
@@ -14,6 +15,7 @@ CGPoint getWinPos(AXUIElementRef window);
 void setWinPos(AXUIElementRef window, CGPoint point);
 CGSize getWinSize(AXUIElementRef window);
 void setWinSize(AXUIElementRef window, CGSize size);
+void focusWin(AXUIElementRef win);
 void updateWin(AXUIElementRef win);
 void stopTimer();
 CGEventRef callback(CGEventTapProxy proxy, CGEventType type,
@@ -80,6 +82,18 @@ void setWinSize(AXUIElementRef win, CGSize s) {
     if (v) { AXUIElementSetAttributeValue(win, kAXSizeAttribute, v); CFRelease(v); }
 }
 
+void focusWin(AXUIElementRef win) {
+    if (!win) return;
+    AXUIElementSetAttributeValue(win, kAXMainAttribute, kCFBooleanTrue);
+    AXUIElementSetAttributeValue(win, kAXFocusedAttribute, kCFBooleanTrue);
+    pid_t pid = 0;
+    AXUIElementGetPid(win, &pid);
+    if (pid > 0) {
+        NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+        [app activateWithOptions:NSApplicationActivateAllWindows];
+    }
+}
+
 void updateWin(AXUIElementRef win) {
     if (updateTimer) return;
     CFRetain(win);
@@ -99,11 +113,12 @@ void stopTimer() {
     updateTimer = NULL;
 }
 
-CGEventRef callback(CGEventTapProxy proxy, CGEventType type,
-                    CGEventRef event, void *refcon)
+CGEventRef callback(
+  CGEventTapProxy proxy, CGEventType type, CGEventRef event, void *refcon)
 {
     CGEventFlags flags = CGEventGetFlags(event);
     bool alt = (flags & kCGEventFlagMaskAlternate) != 0;
+    bool ctrl = (flags & kCGEventFlagMaskControl) != 0;
 
     if (!alt) {
         dragging = false;
@@ -112,6 +127,11 @@ CGEventRef callback(CGEventTapProxy proxy, CGEventType type,
             CFRelease(target);
             target = NULL;
         }
+        return event;
+    }
+
+    if (type == kCGEventFlagsChanged) {
+        if ((dragging || resizing) && ctrl) focusWin(target);
         return event;
     }
 
@@ -164,7 +184,6 @@ CGEventRef callback(CGEventTapProxy proxy, CGEventType type,
         return NULL;
     }
 
-
     return event;
 }
 
@@ -175,7 +194,8 @@ int main(int argc, const char *argv[]) {
     CGEventMask eventMask =
         (1 << kCGEventLeftMouseDown) | (1 << kCGEventLeftMouseUp) |
         (1 << kCGEventLeftMouseDragged) | (1 << kCGEventRightMouseDown) |
-        (1 << kCGEventRightMouseUp) | (1 << kCGEventRightMouseDragged);
+        (1 << kCGEventRightMouseUp) | (1 << kCGEventRightMouseDragged) |
+        (1 << kCGEventFlagsChanged);
 
     CFMachPortRef eventTap = CGEventTapCreate(
         kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault,

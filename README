@@ -1,0 +1,9 @@
+This is a simple utility to drag and resize windows with modifier keys.
+It is functionally similar to most Linux window managers and AltDrag on Windows.
+
+To use, hold down the Option(Alt) key and drag the window to move it.
+right-clicking and dragging will resize the window instead.
+
+In either case, pressing Control will focus the window.
+
+See LICENSE file for copyright and license details.

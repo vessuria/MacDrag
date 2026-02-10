@@ -28,8 +28,8 @@ static bool hasPos = false;
 static bool hasSize = false;
 bool dragging = false;
 bool resizing = false;
-bool resL = false;
-bool resT = false;
+bool resizeLeft = false;
+bool resizeTop = false;
 
 AXUIElementRef getElementAtPos(CGPoint pt) {
     AXUIElementRef sys = AXUIElementCreateSystemWide(), el = NULL;
@@ -149,8 +149,8 @@ CGEventRef callback(
             if (type == kCGEventLeftMouseDown) dragging = true;
             else {
                 resizing = true;
-                resL = mouseLoc.x < initPos.x + initSize.width / 2;
-                resT = mouseLoc.y < initPos.y + initSize.height / 2;
+                resizeLeft = mouseLoc.x < initPos.x + initSize.width / 2;
+                resizeTop = mouseLoc.y < initPos.y + initSize.height / 2;
             }
             return NULL;
         }

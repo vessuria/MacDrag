@@ -1,9 +1,12 @@
 /* See LICENSE file for copyright and license details.
  *
  * MacDrag - Drag and resize windows with modifier
- * 
+ *
  * To understand everything else, start reading main().
  */
+
+// Swap CTRL<->ALT
+#define SWAP_MODIFIERS 0
 
 #import <ApplicationServices/ApplicationServices.h>
 #import <Cocoa/Cocoa.h>
@@ -116,10 +119,16 @@ CGEventRef callback(
   CGEventTapProxy proxy, CGEventType type, CGEventRef event, void *refcon)
 {
     CGEventFlags flags = CGEventGetFlags(event);
-    bool alt = (flags & kCGEventFlagMaskAlternate) != 0;
-    bool ctrl = (flags & kCGEventFlagMaskControl) != 0;
 
-    if (!alt) {
+    #if SWAP_MODIFIERS
+    bool reqDrag = (flags & kCGEventFlagMaskControl) != 0;
+    bool reqResize = (flags & kCGEventFlagMaskAlternate) != 0;
+    #else
+    bool reqDrag = (flags & kCGEventFlagMaskAlternate) != 0;
+    bool reqResize = (flags & kCGEventFlagMaskControl) != 0;
+    #endif
+
+    if (!reqDrag) {
         dragging = false;
         resizing = false;
         if (target) {
@@ -130,7 +139,7 @@ CGEventRef callback(
     }
 
     if (type == kCGEventFlagsChanged) {
-        if ((dragging || resizing) && ctrl) focusWin(target);
+        if ((dragging || resizing) && reqResize) focusWin(target);
         return event;
     }
 
@@ -164,10 +173,10 @@ CGEventRef callback(
             hasPos = true;
         } else {
             CGFloat min = 100.0;
-            CGFloat w = MAX(min, initSize.width + (resL ? -dx : dx));
-            CGFloat h = MAX(min, initSize.height + (resT ? -dy : dy));
-            pendingPos = CGPointMake(initPos.x + (resL ? (w == min ? initSize.width - min : dx) : 0),
-                                    initPos.y + (resT ? (h == min ? initSize.height - min : dy) : 0));
+            CGFloat w = MAX(min, initSize.width + (resizeLeft ? -dx : dx));
+            CGFloat h = MAX(min, initSize.height + (resizeTop ? -dy : dy));
+            pendingPos = CGPointMake(initPos.x + (resizeLeft ? (w == min ? initSize.width - min : dx) : 0),
+                                    initPos.y + (resizeTop ? (h == min ? initSize.height - min : dy) : 0));
             pendingSize = CGSizeMake(w, h);
             hasPos = hasSize = true;
         }

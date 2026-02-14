@@ -98,9 +98,19 @@ void focusWin(AXUIElementRef win) {
 
 void updateWin(AXUIElementRef win) {
     if (updateTimer) return;
+
+    double maxRate = 60.0;
+    if (@available(macOS 12.0, *)) {
+        for (NSScreen *screen in [NSScreen screens]) {
+            NSInteger rate = [screen maximumFramesPerSecond];
+            if (rate > maxRate) maxRate = (double)rate;
+        }
+    }
+    uint64_t interval = (uint64_t)(1e9 / maxRate);
+
     CFRetain(win);
     updateTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0));
-    dispatch_source_set_timer(updateTimer, DISPATCH_TIME_NOW, 16 * NSEC_PER_MSEC, 1 * NSEC_PER_MSEC);
+    dispatch_source_set_timer(updateTimer, DISPATCH_TIME_NOW, interval, 1 * NSEC_PER_MSEC);
     dispatch_source_set_event_handler(updateTimer, ^{
         if (hasPos) { setWinPos(win, pendingPos); hasPos = false; }
         if (hasSize) { setWinSize(win, pendingSize); hasSize = false; }
